@@ -3,6 +3,6 @@ function(nem){
         console.log("myname");
     } else{
         console.log("no name);
-    }  as
+    }  
 }
 
