@@ -1,0 +1,330 @@
+erfect — I got you. Below is a single, copy-pasteable, step-by-step guide to set up the entire project on Windows 11 (the same way you already did on the first machine). I include everything you asked for: exact PowerShell commands, how to generate a strong password and its SHA-256 hash, environment variables, troubleshooting commands, and the “one-line” fixes we used for pip timeouts. Follow the steps in order. I kept each step small — do one thing, confirm it works, then move to the next.
+
+⚠️ Security note: I won’t generate permanent secrets for you. I show how to generate strong secrets locally and how to hash them. Never post real passwords in public chat.
+
+Quick overview (what we will do)
+
+Prepare Windows features (WSL2 + virtualization) — recommended for Docker Desktop.
+
+Install Docker Desktop (via winget).
+
+Clone / place your project in D:\DocumentAI\DocumentAI.
+
+Start the microservices stack (docker-compose).
+
+Fix any pip timeout installs (commands included).
+
+Run the frontend (simple Python or Nginx).
+
+Health checks, logs, stop/restart commands.
+
+Generate passwords + SHA256 hash locally.
+
+A. Admin: open PowerShell as Administrator
+
+Right-click Start → Windows Terminal (Admin) or PowerShell (Admin).
+
+B. (Optional but recommended) Enable virtualization & WSL2
+
+If your Windows already has virtualization enabled (you did earlier), skip to install Docker. If not, run as Admin:
+
+# Enable WSL and Virtual Machine Platform (one-time)
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+
+# Set default WSL version 2
+wsl --set-default-version 2
+
+# Install Ubuntu (will download from MS store via WSL)
+wsl --install -d Ubuntu
+
+
+Reboot if prompted.
+
+C. Install Docker Desktop (Windows 11) — copy/paste
+
+Open an Admin PowerShell and run:
+
+:: Install Docker Desktop using winget (Windows 11)
+winget install -e --id Docker.DockerDesktop
+
+
+After install:
+
+Launch Docker Desktop.
+
+In Docker Desktop → Settings:
+
+General: Use the WSL 2 based engine (ON).
+
+Resources → WSL Integration: turn ON integration for your distro (Ubuntu).
+
+Resources → File sharing: ensure the drive you will use (e.g., D:) is available.
+
+Verify:
+
+docker --version
+docker compose version
+docker run hello-world
+
+
+If docker run hello-world succeeds, Docker is ready.
+
+D. Put the project on the laptop
+
+Place your repository folder at (recommended):
+
+D:\DocumentAI\DocumentAI
+
+
+If you need to clone from git:
+
+cd D:\
+git clone <your-repo-url> DocumentAI
+cd D:\DocumentAI\DocumentAI
+
+E. Start the services (first run)
+
+From the project root (D:\DocumentAI\DocumentAI) run:
+
+cd D:\DocumentAI\DocumentAI
+
+# Start the compose that worked for you
+docker compose -f docker-compose-working.yml up -d
+
+
+Check running containers:
+
+docker compose -f docker-compose-working.yml ps
+
+
+Check gateway health:
+
+curl.exe http://localhost:8000/health
+
+
+You should get JSON with service booleans (true/false). If any service shows false or you see pip installation errors in logs, follow the next step.
+
+F. If a service times out installing Python packages (common on first run)
+
+If logs show pip timeouts like ReadTimeoutError or The read operation timed out, re-run installation with extended timeout inside the image (we used this before).
+
+Do only for the service that is stuck. Examples below.
+
+For API Gateway (service name api-gateway):
+docker compose -f docker-compose-working.yml run --rm api-gateway `
+  sh -lc "pip config set global.timeout 180 && pip config set global.retries 10 && pip install -r requirements.txt -i https://pypi.org/simple"
+
+docker compose -f docker-compose-working.yml up -d api-gateway
+
+For Entity Extraction (service name entity-extraction-service):
+docker compose -f docker-compose-working.yml run --rm entity-extraction-service `
+  sh -lc "pip config set global.timeout 180 && pip config set global.retries 10 && pip install -r requirements.txt -i https://pypi.org/simple"
+
+docker compose -f docker-compose-working.yml up -d entity-extraction-service
+
+
+Then re-check gateway health:
+
+curl.exe http://localhost:8000/health
+
+G. Tail logs & debug one service (single commands you’ll use often)
+# Follow all logs
+docker compose -f docker-compose-working.yml logs -f
+
+# Follow one service
+docker compose -f docker-compose-working.yml logs -f api-gateway
+docker compose -f docker-compose-working.yml logs -f entity-extraction-service
+
+# Show last 200 lines for a service
+docker compose -f docker-compose-working.yml logs --tail=200 api-gateway
+
+H. Frontend — two easy methods (pick one)
+Option 1 — Quick (dev) using Python’s simple server
+
+If your frontend files are in D:\DocumentAI\DocumentAI\frontend\html or D:\DocumentAI\DocumentAI\frontend:
+
+# If index.html is inside frontend\html
+python -m http.server 8080 -d .\frontend\html
+
+# or if index.html is inside frontend
+python -m http.server 8080 -d .\frontend
+
+
+Open http://localhost:8080/ in the browser.
+
+Option 2 — Serve via nginx Docker (production-like)
+docker run -d --name doc-frontend `
+  -p 80:80 `
+  -v D:\DocumentAI\DocumentAI\frontend:/usr/share/nginx/html:ro `
+  nginx:alpine
+
+
+Open http://localhost/ (or use -p 8080:80 and open http://localhost:8080/ if you prefer port 8080).
+
+If port 80 is busy, check which process:
+netstat -ano | findstr :80 and stop the PID (IIS or other) if you want to free port 80.
+
+I. CORS (browser calls to backend)
+
+Recommended: point frontend to the API Gateway at http://localhost:8000 and enable CORS once on the gateway.
+
+Add to FastAPI app (gateway):
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+  CORSMiddleware,
+  allow_origins=["http://localhost:8080"],  # or ["*"] for local dev
+  allow_credentials=True,
+  allow_methods=["*"],
+  allow_headers=["*"],
+)
+
+
+Rebuild & restart gateway:
+
+docker compose -f docker-compose-working.yml build api-gateway
+docker compose -f docker-compose-working.yml up -d api-gateway
+
+J. Stop / Start / Restart commands (cheat sheet)
+# Stop containers but keep them
+docker compose -f docker-compose-working.yml stop
+
+# Stop & remove containers and network (clean)
+docker compose -f docker-compose-working.yml down
+
+# Start in background
+docker compose -f docker-compose-working.yml up -d
+
+# Restart all
+docker compose -f docker-compose-working.yml restart
+
+# Restart a single service
+docker compose -f docker-compose-working.yml restart api-gateway
+
+# Check status
+docker compose -f docker-compose-working.yml ps
+
+# Tail logs for a single service
+docker compose -f docker-compose-working.yml logs -f api-gateway
+
+K. Health endpoints to check (quick)
+curl.exe http://localhost:8000/health      # API Gateway
+curl.exe http://localhost:8001/health      # Classification
+curl.exe http://localhost:8002/health      # Quality
+curl.exe http://localhost:8003/health      # Preprocessing
+curl.exe http://localhost:8004/health      # Entity extraction
+curl.exe http://localhost:8005/health      # Rule engine
+
+
+If some returns Empty reply from server → check that service logs (docker compose logs -f <service>).
+
+L. Creating / storing credentials (how to make a strong password and SHA256 locally)
+
+Run this in PowerShell on the laptop to generate a good random password and its SHA256 hex:
+
+# Generate a random readable password (16 chars, 3 non-alphanumeric)
+$pw = [System.Web.Security.Membership]::GeneratePassword(16,3)
+# Compute SHA256 hex
+$hash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($pw))).Replace("-","").ToLower()
+Write-Output "PASSWORD:$pw"
+Write-Output "SHA256:$hash"
+
+
+Copy the printed PASSWORD into a secrets manager (1Password, LastPass, Bitwarden) or into a local .env file that is not committed to git.
+
+Store the SHA256 if you need to keep a hash copy for verification.
+
+Example .env (create .env in project root and never commit it)
+POSTGRES_DB=document_processing
+POSTGRES_USER=docuser
+POSTGRES_PASSWORD=<your-generated-password-here>
+
+REDIS_PASSWORD=<optional>
+
+# API keys (if any)
+SOME_API_KEY=<put-your-key-here>
+
+
+Load .env into docker-compose or your app as needed. The compose files can use ${POSTGRES_PASSWORD} style variables.
+
+M. Useful checks & troubleshooting (common issues & fixes)
+
+Pip timeouts → use the docker compose run --rm <service> sh -lc "pip config set global.timeout 180 && pip config set global.retries 10 && pip install -r requirements.txt" trick (see section F).
+
+Empty reply from server → container is running but app not started; run docker compose logs -f <service> and look for Uvicorn running or Application startup complete.
+
+Port already in use → netstat -ano | findstr :80 then tasklist | findstr <PID> and stop service if safe (e.g., sc stop W3SVC for IIS).
+
+Firewall blocking → allow Docker Desktop and ports in Windows Firewall if necessary.
+
+Slow builds/downloads → consider performing the heavy pip installs once locally (as we did), or ensure a stable internet connection.
+
+Docker Desktop WSL integration → settings → Resources → WSL Integration: enable Ubuntu if you use WSL.
+
+N. Optional: export step-by-step into a file for the other laptop
+
+If you want a single file to copy to the other laptop (like setup_steps.txt), create it locally:
+
+@"
+1) Enable WSL2...
+(put the instructions above)
+"@ > D:\DocumentAI\setup_instructions.txt
+
+O. Final notes & checklist you can copy-paste to a notepad
+
+Below is the minimal set of commands to copy to the new laptop (run in Admin PowerShell). Do them in order:
+
+# 1: Optional WSL + virtualization (Admin)
+dism.exe /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart
+dism.exe /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart
+wsl --set-default-version 2
+wsl --install -d Ubuntu
+
+# Reboot if prompted
+
+# 2: Install Docker Desktop (Admin)
+winget install -e --id Docker.DockerDesktop
+
+# 3: Verify docker
+docker --version
+docker compose version
+docker run hello-world
+
+# 4: Put project at D:\DocumentAI\DocumentAI
+# (clone/copy the repo)
+cd D:\DocumentAI\DocumentAI
+
+# 5: Start stack
+docker compose -f docker-compose-working.yml up -d
+
+# 6: If a service times out on pip: example for api-gateway
+docker compose -f docker-compose-working.yml run --rm api-gateway `
+  sh -lc "pip config set global.timeout 180 && pip config set global.retries 10 && pip install -r requirements.txt -i https://pypi.org/simple"
+docker compose -f docker-compose-working.yml up -d api-gateway
+
+# 7: Check health
+curl.exe http://localhost:8000/health
+
+# 8: Serve frontend (pick one)
+python -m http.server 8080 -d .\frontend
+# OR via nginx container:
+docker run -d --name doc-frontend -p 80:80 -v D:\DocumentAI\DocumentAI\frontend:/usr/share/nginx/html:ro nginx:alpine
+
+# 9: Generate strong password & hash (run locally)
+$pw = [System.Web.Security.Membership]::GeneratePassword(16,3)
+$hash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($pw))).Replace("-","").ToLower()
+Write-Output "PASSWORD:$pw"
+Write-Output "SHA256:$hash"
+
+
+If you want, I’ll:
+
+Produce a one-page printable PDF of the steps (I can generate the text for you to save), or
+
+Create a ready-to-paste .env.example file with placeholders for the other laptop, or
+
+Give you a single setup_script.ps1 (PowerShell) that runs the non-interactive parts — I can write it out here for you to paste into a file.
+
+Which of those would you like next?
